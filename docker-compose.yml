@@ -1,0 +1,105 @@
+version: '3.8'
+
+services:
+  # Base de datos PostgreSQL
+  postgres:
+    image: postgres:15
+    container_name: documentacion_rag_postgres
+    environment:
+      POSTGRES_DB: documentacion_rag
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d documentacion_rag"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Redis para Celery
+  redis:
+    image: redis:7-alpine
+    container_name: documentacion_rag_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Aplicación FastAPI
+  app:
+    build: .
+    container_name: documentacion_rag_app
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://user:password@postgres:5432/documentacion_rag
+      - REDIS_URL=redis://redis:6379
+      - LLM_PROVIDER=ollama
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_MODEL=llama2
+      - CHROMA_PERSIST_DIRECTORY=/app/chroma_db
+      - DEBUG=False
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./chroma_db:/app/chroma_db
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Celery Worker
+  celery:
+    build: .
+    container_name: documentacion_rag_celery
+    command: celery -A app.celery_app worker --loglevel=info
+    environment:
+      - DATABASE_URL=postgresql://user:password@postgres:5432/documentacion_rag
+      - REDIS_URL=redis://redis:6379
+      - LLM_PROVIDER=ollama
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_MODEL=llama2
+      - CHROMA_PERSIST_DIRECTORY=/app/chroma_db
+      - DEBUG=False
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./chroma_db:/app/chroma_db
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Ollama (LLM local)
+  ollama:
+    image: ollama/ollama:latest
+    container_name: documentacion_rag_ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  postgres_data:
+  redis_data:
+  ollama_data: 
